@@ -1,15 +1,18 @@
 # UTM Linker
 # Licensed with the GNU General Public License version 3 I guess
 
-#importing libraries
-from datetime import datetime
+# importing libraries
+import csv
 import os
 import re
 import tkinter as tk
-import csv
+from datetime import datetime
 from tkinter import filedialog
+
 from bs4 import BeautifulSoup
+
 from functions import *
+
 
 # read the HTML source file
 def main():
@@ -18,112 +21,217 @@ def main():
         return
 
     # Get user-provided UTM parameters
-    utm_unit= unit.get()
+    utm_unit = unit.get()
     utm_campaign = utm_campaign_entry.get()
     utm_source = utm_source_entry.get()
+    try:
+        with open(file_path, "r") as file:
+            # generate iterable content for the rest of the function
+            old_html = file.read()
 
-    with open(file_path, 'r') as file:
+            if "<!-- Begin main content area -->" in old_html:
+                # creates variables to hold the content that comes both before and after the content to be updated and stores that content in those variables
+                old_html_head = (
+                    old_html.split("<!-- Begin main content area -->")[0]
+                    + "<!-- Begin main content area -->"
+                )
+                old_html_foot = (
+                    "<!-- End: main content area -->"
+                    + old_html.split("<!-- Begin main content area -->")[1].split(
+                        "<!-- End: main content area -->"
+                    )[1]
+                )
 
-        # generate iterable content for the rest of the function
-        old_html = file.read()
+                # creates the variable that will hold the lines of HTML that need to be searched/updated and stores that content here
+                working_html = old_html.split("<!-- Begin main content area -->")[
+                    1
+                ].split("<!-- End: main content area -->")[0]
 
-        if "<!-- Begin main content area -->" in old_html:
+                # builds a list out of all the links in the working HTML string and strips the extra quotation mark that's coming along with them for some reason
+                # hopefully I'll be able to get rid of this function at some point
+                working_replace_links = []
 
-            # creates variables to hold the content that comes both before and after the content to be updated and stores that content in those variables
-            old_html_head = old_html.split("<!-- Begin main content area -->")[0] + "<!-- Begin main content area -->"
-            old_html_foot = "<!-- End: main content area -->" + old_html.split("<!-- Begin main content area -->")[1].split("<!-- End: main content area -->")[1]
+                # grabs all of the links in the working_html
+                soup = BeautifulSoup(working_html, "html.parser")
+                for link in soup.find_all("a"):
+                    working_replace_links.append(link["href"])
 
-            # creates the variable that will hold the lines of HTML that need to be searched/updated and stores that content here
-            working_html = old_html.split("<!-- Begin main content area -->")[1].split("<!-- End: main content area -->")[0]
+                # puts both of these lists into variables to make them more easily accessible to other functions
+                final_replace_links = link_filter(working_replace_links)
 
-            # builds a list out of all the links in the working HTML string and strips the extra quotation mark that's coming along with them for some reason
-            # hopefully I'll be able to get rid of this function at some point
-            working_replace_links = []
+                final_utm_content_list = content_grabber(working_html)
 
-            # grabs all of the links in the working_html
-            soup = BeautifulSoup(working_html, 'html.parser')
-            for link in soup.find_all('a'):
-                working_replace_links.append(link['href'])
+                # initialize the list that will hold the links with final UTM parameters attached minus the content parameter
+                working_utm_links = []
 
-            #puts both of these lists into variables to make them more easily accessible to other functions
-            final_replace_links = link_filter(working_replace_links)
+                # checks to see if there is an existing query string in the source URL. if so, the UTM parameters are added onto that existing query string rather than added as a new query string
+                for url in final_replace_links:
+                    if (
+                        "?" in url
+                        or url.lower() == "{{form-link}}"
+                        or url.lower() == "{{form-survey-link}}"
+                    ):
+                        working_utm_links.append(
+                            (
+                                url
+                                + "&utm_source="
+                                + utm_unit
+                                + "-"
+                                + utm_source
+                                + "&utm_medium=email"
+                                + "&utm_campaign="
+                                + utm_campaign
+                            )
+                        )
+                    else:
+                        working_utm_links.append(
+                            (
+                                url
+                                + "?utm_source="
+                                + utm_unit
+                                + "-"
+                                + utm_source
+                                + "&utm_medium=email"
+                                + "&utm_campaign="
+                                + utm_campaign
+                            )
+                        )
 
-            final_utm_content_list = content_grabber(working_html)
+                # create the final list of links with UTMs attached that will be added into the current working HTML string
+                final_utm_links = anchor_ripper(
+                    utm_content_appender(working_utm_links, final_utm_content_list)
+                )
 
-            # initialize the list that will hold the links with final UTM parameters attached minus the content parameter
-            working_utm_links = []
+                # looks through the working HTML string and replaces the links inside with their corresponding UTM links
+                final_body_html = HTML_link_replacer(
+                    working_html, final_replace_links, final_utm_links
+                )
 
-            # checks to see if there is an existing query string in the source URL. if so, the UTM parameters are added onto that existing query string rather than added as a new query string
-            for url in final_replace_links:
-                if "?" in url or url == "{{Form-Link}}" or url == "{{Form-Survey-Link}}":
-                    working_utm_links.append((url + "&utm_source=" + utm_unit + "-" + utm_source + "&utm_medium=email" + "&utm_campaign=" + utm_campaign))
-                else:
-                    working_utm_links.append((url + "?utm_source=" + utm_unit + "-" + utm_source + "&utm_medium=email" + "&utm_campaign=" + utm_campaign))
+                # Save the modified HTML to a new file
+                with open(file_path, "w") as save_file:
+                    save_file.write(old_html_head + final_body_html + old_html_foot)
 
-            # create the final list of links with UTMs attached that will be added into the current working HTML string
-            final_utm_links = anchor_ripper(utm_content_appender(working_utm_links, final_utm_content_list))
-            
-            # looks through the working HTML string and replaces the links inside with their corresponding UTM links
-            final_body_html = HTML_link_replacer(working_html, final_replace_links, final_utm_links)
+            else:
+                # initialize list that will hold links from the email
+                working_replace_links = []
 
-            # Save the modified HTML to a new file
-            with open(file_path, 'w') as save_file:
-                save_file.write(old_html_head + final_body_html + old_html_foot)
-        
+                # grabs all of the links in the email
+                soup = BeautifulSoup(old_html, "html.parser")
+                for link in soup.find_all("a"):
+                    working_replace_links.append(link["href"])
+
+                # puts both of these lists into variables to make them more easily accessible to other functions
+                final_replace_links = link_filter(working_replace_links)
+
+                final_utm_content_list = content_grabber(old_html)
+
+                # initialize the list that will hold the links with final UTM parameters attached minus the content parameter
+                working_utm_links = []
+
+                # checks to see if there is an existing query string in the source URL. if so, the UTM parameters are added onto that existing query string rather than added as a new query string
+                for url in final_replace_links:
+                    if (
+                        "?" in url
+                        or url.lower() == "{{form-link}}"
+                        or url.lower() == "{{form-survey-link}}"
+                    ):
+                        working_utm_links.append(
+                            (
+                                url
+                                + "&utm_source="
+                                + utm_unit
+                                + "-"
+                                + utm_source
+                                + "&utm_medium=email"
+                                + "&utm_campaign="
+                                + utm_campaign
+                            )
+                        )
+                    else:
+                        working_utm_links.append(
+                            (
+                                url
+                                + "?utm_source="
+                                + utm_unit
+                                + "-"
+                                + utm_source
+                                + "&utm_medium=email"
+                                + "&utm_campaign="
+                                + utm_campaign
+                            )
+                        )
+
+                # create the final list of links with UTMs attached that will be added into the current working HTML string
+                final_utm_links = anchor_ripper(
+                    utm_content_appender(working_utm_links, final_utm_content_list)
+                )
+
+                # looks through the working HTML string and replaces the links inside with their corresponding UTM links
+                final_body_html = HTML_link_replacer(
+                    old_html, final_replace_links, final_utm_links
+                )
+
+                print(final_body_html)
+
+                # Save the modified HTML to a new file
+                with open(file_path, "w") as save_file:
+                    save_file.write(final_body_html)
+
+        # write the UTM parameters and links to a CSV file
+        if os.path.isfile("./" + date_checker() + "_EMC_HTML_UTM_links.csv") == True:
+            with open(
+                date_checker() + "_EMC_HTML_UTM_links.csv", "a", newline=""
+            ) as file:
+                writer = csv.writer(file)
+                for i in range(len(final_replace_links)):
+                    writer.writerow(
+                        [
+                            final_replace_links[i],
+                            utm_unit + "-" + utm_source,
+                            "email",
+                            utm_campaign,
+                            final_utm_content_list[i],
+                            final_utm_links[i],
+                            datetime.today().strftime("%Y-%m-%d"),
+                        ]
+                    )
         else:
-            # initialize list that will hold links from the email
-            working_replace_links = []
+            with open(
+                date_checker() + "_EMC_HTML_UTM_links.csv", "w", newline=""
+            ) as file:
+                writer = csv.writer(file)
+                writer.writerow(
+                    [
+                        "Base URL",
+                        "Source",
+                        "Medium",
+                        "Campaign",
+                        "Content",
+                        "UTM Link",
+                        "Date Created",
+                    ]
+                )
+                for i in range(len(final_replace_links)):
+                    writer.writerow(
+                        [
+                            final_replace_links[i],
+                            utm_unit + "-" + utm_source,
+                            "email",
+                            utm_campaign,
+                            final_utm_content_list[i],
+                            final_utm_links[i],
+                            datetime.today().strftime("%Y-%m-%d"),
+                        ]
+                    )
 
-            # grabs all of the links in the email
-            soup = BeautifulSoup(old_html, 'html.parser')
-            for link in soup.find_all('a'):
-                working_replace_links.append(link['href'])
-            
-            #puts both of these lists into variables to make them more easily accessible to other functions
-            final_replace_links = link_filter(working_replace_links)
+        # reset lists so that the program can be run again without restarting
+        working_utm_links = []
+        working_replace_links = []
+        final_replace_links = []
+        final_utm_links = []
+    except UnicodeDecodeError:
+        continue
 
-            final_utm_content_list = content_grabber(old_html)
-
-            # initialize the list that will hold the links with final UTM parameters attached minus the content parameter
-            working_utm_links = []
-
-            # checks to see if there is an existing query string in the source URL. if so, the UTM parameters are added onto that existing query string rather than added as a new query string
-            for url in final_replace_links:
-                if "?" in url or url == "{{Form-Link}}" or url == "{{Form-Survey-Link}}":
-                    working_utm_links.append((url + "&utm_source=" + utm_unit + "-" + utm_source + "&utm_medium=email" + "&utm_campaign=" + utm_campaign))
-                else:
-                    working_utm_links.append((url + "?utm_source=" + utm_unit + "-" + utm_source + "&utm_medium=email" + "&utm_campaign=" + utm_campaign))
-            
-            # create the final list of links with UTMs attached that will be added into the current working HTML string
-            final_utm_links = anchor_ripper(utm_content_appender(working_utm_links, final_utm_content_list))
-            
-            # looks through the working HTML string and replaces the links inside with their corresponding UTM links
-            final_body_html = HTML_link_replacer(old_html, final_replace_links, final_utm_links)
-
-            print(final_body_html)
-
-            # Save the modified HTML to a new file
-            with open(file_path, 'w') as save_file:
-                save_file.write(final_body_html)
-
-    # write the UTM parameters and links to a CSV file
-    if os.path.isfile("./" + date_checker() + "_EMC_HTML_UTM_links.csv") == True:
-        with open(date_checker() + '_EMC_HTML_UTM_links.csv', 'a', newline='') as file:
-            writer = csv.writer(file)
-            for i in range(len(final_replace_links)):
-                writer.writerow([final_replace_links[i], utm_unit + '-' + utm_source, 'email', utm_campaign, final_utm_content_list[i], final_utm_links[i], datetime.today().strftime('%Y-%m-%d')])
-    else:
-        with open(date_checker() + '_EMC_HTML_UTM_links.csv', 'w', newline='') as file:
-            writer = csv.writer(file)
-            writer.writerow(["Base URL", "Source", "Medium", "Campaign", "Content", "UTM Link", "Date Created"])
-            for i in range(len(final_replace_links)):
-                writer.writerow([final_replace_links[i], utm_unit + '-' + utm_source, 'email', utm_campaign, final_utm_content_list[i], final_utm_links[i], datetime.today().strftime('%Y-%m-%d')])
-    
-    # reset lists so that the program can be run again without restarting
-    working_utm_links = []
-    working_replace_links = []
-    final_replace_links = []
-    final_utm_links = []
 
 # Create the main window
 root = tk.Tk()
@@ -162,7 +270,10 @@ select_button = tk.Button(root, text="Select HTML File", command=main)
 select_button.pack()
 
 # Display a message to guide the user
-message_label = tk.Label(root, text="Enter UTM parameters and then select an HTML file.\n\nBE CAREFUL: The selected HTML file will be overwritten and this cannot be undone.")
+message_label = tk.Label(
+    root,
+    text="Enter UTM parameters and then select an HTML file.\n\nBE CAREFUL: The selected HTML file will be overwritten and this cannot be undone.",
+)
 message_label.pack()
 
 root.mainloop()
